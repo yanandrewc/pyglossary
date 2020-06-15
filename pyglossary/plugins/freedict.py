@@ -5,6 +5,7 @@ from pyglossary.xml_utils import xml_escape
 from typing import List, Union, Callable
 from lxml import etree as ET
 from io import BytesIO
+import tempfile
 
 enable = True
 format = "Freedict"
@@ -18,7 +19,7 @@ depends = {}
 tei = "{http://www.tei-c.org/ns/1.0}"
 
 class Reader(object):
-	ns = {
+	default_ns = {
 		None: "http://www.tei-c.org/ns/1.0",
 	}
 
@@ -170,31 +171,81 @@ class Reader(object):
 	def __init__(self, glos: GlossaryType):
 		self._glos = glos
 		self._wordCount = 0
+		self.ns = None
 
 	def __len__(self) -> int:
 		return self._wordCount
 
 	def close(self) -> None:
 		pass
+		#self._file.close()
+
+	def process_header(self, _file):
+		header_s = b""
+		started = False
+		for line in _file:
+			if b"<teiHeader" in line:
+				header_s += line
+				started = True
+				continue
+			if b"</teiHeader>" in line:
+				header_s += line
+				break
+			if started:
+				header_s += line
+		header = ET.fromstring(header_s)
+		self.set_metadata(header)
 
 	def open(self, filename: str):
 		self._filename = filename
-
-		context = ET.iterparse(filename, events=("end",))
-		for action, elem in context:
-			if elem.tag == f"{tei}teiHeader":
-				self.set_metadata(elem)
-				return
+		self._file = open(filename, mode="rb")
+		self.process_header(self._file)
+		self._file.close()
 
 	def __iter__(self) -> Iterator[BaseEntry]:
-		context = ET.iterparse(self._filename, events=("end",))
+		# body = bytearray("", "utf-8")
+		#next(self._file) # read <text>
+		#body = self._file.read()
+		#body = body[body.find(b"<body>"):]
+		#body = body[:body.find(b"</body>")+7]
+		#body_obj = BytesIO(body)
+		#self._tmpFilename = tmpFilename = tempfile.mktemp(prefix="pyglossary")
+		#log.info(f"tmpFilename = {tmpFilename}")
+		#tmpFile = open(tmpFilename, mode="wb")
+		#tmpFile.write(b'<?xml version="1.0" encoding="UTF-8"?>\n')
+		#for line in self._file:
+		#	tmpFile.write(line)
+		#	if b"</body" in line:
+		#		break
+
+		self.ns = self.default_ns
+		context = ET.iterparse(
+			self._filename,
+			tag=f"{tei}entry",
+			#tag="entry",
+			events=("end",),
+			dtd_validation=False,
+			load_dtd=False,
+			no_network=True,
+			compact=True,
+			resolve_entities=False,
+			huge_tree=True,
+			encoding="utf-8",
+		)
+
 		for action, elem in context:
-			if elem.tag == f"{tei}entry":
-				words, defi = self.get_entry_html(elem)
-				yield self._glos.newEntry(words, defi)
-				# clean up preceding siblings to save memory
-				while elem.getprevious() is not None:
-					del elem.getparent()[0]
+			#log.info(elem.tag)
+			# if elem.tag == f"{tei}teiHeader":
+			# if elem.tag == f"{tei}entry":
+			words, defi = self.get_entry_html(elem)
+			yield self._glos.newEntry(words, defi)
+			# elem.clear()  # does not help
+			# clean up preceding siblings to save memory
+			# this reduces memory usage from ~64 MB to ~30 MB
+			while elem.getparent() is not None and elem.getprevious() is not None:
+				del elem.getparent()[0]
+
+			# del action, elem, words, defi  # does not help
 
 
 
