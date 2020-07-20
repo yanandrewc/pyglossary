@@ -476,6 +476,7 @@ class Glossary(GlossaryType):
 		progressbar = self.ui and self._progressbar
 		if progressbar:
 			self.progressInit("Writing")
+
 		for index, rawEntry in enumerate(self._data):
 			if index & 0x7f == 0:  # 0x3f, 0x7f, 0xff
 				gc.collect()
@@ -928,6 +929,8 @@ class Glossary(GlossaryType):
 		sort: Optional[bool] = None,
 		sortKey: Optional[Callable[[bytes], Any]] = None,
 		sortCacheSize: int = 0,
+		compression: str = "",
+		compFilename: str = "",
 		**options
 	) -> Optional[str]:
 		"""
@@ -939,7 +942,8 @@ class Glossary(GlossaryType):
 			key function for sorting
 			takes a word as argument, which is str or list (with alternates)
 
-		returns absolute path of output file, or None if failed
+		returns a tuple (outFilePath, compression) or None if failed
+			outFileName absolute path of output file
 		"""
 		validOptionKeys = self.formatsWriteOptions.get(format)
 		if validOptionKeys is None:
@@ -1029,9 +1033,34 @@ class Glossary(GlossaryType):
 			)
 
 		filename = abspath(filename)
+		filenameArg = filename
+
+		if compression and self.formatsWriteFileObj[format]:
+			if not compFilename:
+				raise ValueError(
+					f"compression={compression} without compFilename",
+				)
+			fileObj = None
+			# FIXME: if it's text file, open with mode="wt"
+			if compression == "gz":
+				fileObj = gzip.open(compFilename, mode="wb")
+			elif compression == "bz2":
+				import bz2
+				fileObj = bz2.open(compFilename, mode="wb")
+			elif compression == "lzma":
+				import compression
+				fileObj = lzma.open(compFilename, mode="wb")
+			# zip is not suported with zipfile.ZipFile does not allow
+			# passing a file object to write*
+			if fileObj:
+				filename = compFilename
+				filenameArg = ""
+				compression = ""
+				options["fileObj"] = fileObj
+
 		log.info(f"Writing to file {filename!r}")
 		try:
-			gen = writer.write(filename, **options)
+			gen = writer.write(filenameArg, **options)
 			if gen is None:
 				log.error(f"\n{format} write function is not a generator")
 			else:
@@ -1048,7 +1077,7 @@ class Glossary(GlossaryType):
 		finally:
 			self.clear()
 
-		return filename
+		return filename, compression
 
 	def zipOutDir(self, filename: str):
 		if isdir(filename):
@@ -1150,6 +1179,7 @@ class Glossary(GlossaryType):
 		if not outputArgs:
 			log.error(f"Writing file {outputFilename!r} failed.")
 			return
+		compOutputFilename = outputFilename
 		outputFilename, outputFormat, compression = outputArgs
 
 		if direct is None:
@@ -1177,6 +1207,8 @@ class Glossary(GlossaryType):
 			sort=sort,
 			sortKey=sortKey,
 			sortCacheSize=sortCacheSize,
+			compression=compression,
+			compFilename=compOutputFilename,
 			**writeOptions
 		)
 		log.info("")
